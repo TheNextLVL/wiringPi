@@ -6,6 +6,27 @@ Only tested on RPi3b, but in theory will work with any RPi that support the orig
 
 To not use root user to acces to gpio, I recommend to use the kernel of [sakaki](https://github.com/sakaki-/bcmrpi3-kernel)
 
+## Installation
+There are two possibilities, to install using the source code or using the precompiled binary:
+
+Source code:
+```bash
+git clone https://github.com/TheNextLVL/wiringPi.git
+cd wiringPi
+./build
+```
+
+Precompiled binary:
+```bash
+wget http://file.deb
+apt install ./file.deb
+```
+
+Check if working:
+```bash
+gpio -v
+```
+
 Original Description
 --------------------
 
