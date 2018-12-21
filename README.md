@@ -18,8 +18,8 @@ cd wiringPi
 
 Precompiled binary:
 ```bash
-wget http://file.deb
-apt install ./file.deb
+wget https://github.com/TheNextLVL/wiringPi/releases/download/2.46/wiringpi-2.46.deb
+apt install ./wiringpi-2.46.deb
 ```
 
 Check if working:
