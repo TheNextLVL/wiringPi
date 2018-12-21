@@ -70,6 +70,7 @@
 #include <sys/wait.h>
 #include <sys/ioctl.h>
 #include <asm/ioctl.h>
+#include <byteswap.h>
 
 #include "softPwm.h"
 #include "softTone.h"
@@ -732,127 +733,217 @@ static void piGpioLayoutOops (const char *why)
 
 int piGpioLayout (void)
 {
-  FILE *cpuFd ;
-  char line [120] ;
-  char *c ;
+
   static int  gpioLayout = -1 ;
+  #ifdef __aarch64__
+    // On ARM64, read revision from /proc/device-tree/system/linux,revision as it is not shown in
+    // /proc/cpuinfo
+	// Device revision list: https://elinux.org/RPi_HardwareHistory
+	// Thanks to jgarff for the code
+	uint32_t rpi_rev;
+	
+    FILE *f = fopen("/proc/device-tree/system/linux,revision", "r");
+    if (!f)
+    {
+        piGpioLayoutOops ("Unable to open /proc/device-tree/system/linux,revision") ;
+    }
+    fread(&rpi_rev, sizeof(uint32_t), 1, f);
+    #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+        rpi_rev = bswap_32(rpi_rev);  // linux,revision appears to be in big endian
+    #endif
+	
+	switch(rpi_rev){
+		case 0x0002:
+			// Model B 1.0 [Q1 2012 - ??]
+		case 0x0003:
+			// Model B 1.0 [Q3 2012 - ??]
+			gpioLayout = 1;
+			break;
+		case 0x0004:
+			// Model B 2.0 [Q3 2012 - Sony]
+		case 0x0005:
+			// Model B 2.0 [Q4 2012 - Qisda]
+		case 0x0006:
+			// Model B 2.0 [Q4 2012 - Egoman]
+		case 0x0007:
+			// Model A 2.0 [S1 2013 - Egoman]
+		case 0x0008:
+			// Model A 2.0 [Q1 2013 - Sony]
+		case 0x0009:
+			// Model A 2.0 [Q1 2013 - Qisda]
+		case 0x000d:
+			// Model B 2.0 [Q4 2012 - Egoman]
+		case 0x000e:
+			// Model B 2.0 [Q4 2012 - Sony]
+		case 0x000f:
+			// Model B 2.0 [Q4 2012 - Qisda]
+		case 0x0010:
+			// Model B+ 1.0 [Q3 2014 - Sony]
+		case 0x0011:
+			// Compute Module 1 1.0 [Q2 2014 - Sony]
+		case 0x0012:
+			// Model A+ 1.1 [Q4 2014 - Sony]
+		case 0x0013:
+			// Model B+ 1.2 [Q1 2015 - Embest]
+		case 0x0014:
+			// Compute Module 1 [Q2014 - Embest]
+		case 0xa01040:
+			// 2 Model B 1.0 [ ?? - Sony]
+		case 0xa01041:
+			// 2 Model B 1.1 [Q1 2015 - Sony]
+		case 0xa21041:
+			// 2 Model B 1.1 [Q1 2015 - Embest]
+		case 0xa22042:
+			// 2 Model B 1.2 [Q3 2016 - Embest]
+		case 0x900021:
+			// Model A+ 1.1 [Q3 2016 - Sony]
+		case 0x900032:
+			// Model B+ 1.2 [Q2 2016? - Sony]
+		case 0x900092:
+			// Model Zero 1.2 [Q4 2015 - Sony]
+		case 0x900093:
+			// Model Zero 1.3 [Q2 2016 - Sony]
+		case 0x920093:
+			// Model Zero 1.3 [Q4 2016? - Embest]
+		case 0x9000c1:
+			// Model Zero W 1.1 [Q1 2017 - Sony]
+		case 0xa02082:
+			// 3 Model B 1.2 [Q1 2016 - Sony]
+		case 0xa22082:
+			// 3 Model B 1.2 [Q1 2016 - Embest]
+		case 0xa32082:
+			// 3 Model B 1.2 [Q1 2016 - Sony Japan]
+		case 0xa020d3:
+			// 3 Model B+ 1.3 [Q1 2018 - Sony]
+		case 0x9020e0:
+			// 3 Model A+ 1.0 [Q4 2018 -Sony]
+			gpioLayout = 2 ;
+			break;
+		default:
+			piGpioLayoutOops ("Only Raspberry device is supported!") ;
+	}
+	
+  #else
+	  FILE *cpuFd ;
+	  char line [120] ;
+	  char *c ;
+	  if (gpioLayout != -1)	// No point checking twice
+		return gpioLayout ;
 
-  if (gpioLayout != -1)	// No point checking twice
-    return gpioLayout ;
+	  if ((cpuFd = fopen ("/proc/cpuinfo", "r")) == NULL)
+		piGpioLayoutOops ("Unable to open /proc/cpuinfo") ;
 
-  if ((cpuFd = fopen ("/proc/cpuinfo", "r")) == NULL)
-    piGpioLayoutOops ("Unable to open /proc/cpuinfo") ;
+	// Start by looking for the Architecture to make sure we're really running
+	//	on a Pi. I'm getting fed-up with people whinging at me because
+	//	they can't get it to work on weirdFruitPi boards...
 
-// Start by looking for the Architecture to make sure we're really running
-//	on a Pi. I'm getting fed-up with people whinging at me because
-//	they can't get it to work on weirdFruitPi boards...
+	  while (fgets (line, 120, cpuFd) != NULL)
+		if (strncmp (line, "Hardware", 8) == 0)
+		  break ;
 
-  while (fgets (line, 120, cpuFd) != NULL)
-    if (strncmp (line, "Hardware", 8) == 0)
-      break ;
+	  if (strncmp (line, "Hardware", 8) != 0)
+		piGpioLayoutOops ("No \"Hardware\" line") ;
 
-  if (strncmp (line, "Hardware", 8) != 0)
-    piGpioLayoutOops ("No \"Hardware\" line") ;
+	  if (wiringPiDebug)
+		printf ("piGpioLayout: Hardware: %s\n", line) ;
 
-  if (wiringPiDebug)
-    printf ("piGpioLayout: Hardware: %s\n", line) ;
+	// See if it's BCM2708 or BCM2709 or the new BCM2835.
 
-// See if it's BCM2708 or BCM2709 or the new BCM2835.
+	// OK. As of Kernel 4.8,  we have BCM2835 only, regardless of model.
+	//	However I still want to check because it will trap the cheapskates and rip-
+	//	off merchants who want to use wiringPi on non-Raspberry Pi platforms - which
+	//	I do not support so don't email me your bleating whinges about anything
+	//	other than a genuine Raspberry Pi.
 
-// OK. As of Kernel 4.8,  we have BCM2835 only, regardless of model.
-//	However I still want to check because it will trap the cheapskates and rip-
-//	off merchants who want to use wiringPi on non-Raspberry Pi platforms - which
-//	I do not support so don't email me your bleating whinges about anything
-//	other than a genuine Raspberry Pi.
+	#ifdef	DONT_CARE_ANYMORE
+	  if (! (strstr (line, "BCM2708") || strstr (line, "BCM2709") || strstr (line, "BCM2835")))
+	  {
+		fprintf (stderr, "Unable to determine hardware version. I see: %s,\n", line) ;
+		fprintf (stderr, " - expecting BCM2708, BCM2709 or BCM2835.\n") ;
+		fprintf (stderr, "If this is a genuine Raspberry Pi then please report this\n") ;
+		fprintf (stderr, "to projects@drogon.net. If this is not a Raspberry Pi then you\n") ;
+		fprintf (stderr, "are on your own as wiringPi is designed to support the\n") ;
+		fprintf (stderr, "Raspberry Pi ONLY.\n") ;
+		exit (EXIT_FAILURE) ;
+	  }
+	#endif
 
-#ifdef	DONT_CARE_ANYMORE
-  if (! (strstr (line, "BCM2708") || strstr (line, "BCM2709") || strstr (line, "BCM2835")))
-  {
-    fprintf (stderr, "Unable to determine hardware version. I see: %s,\n", line) ;
-    fprintf (stderr, " - expecting BCM2708, BCM2709 or BCM2835.\n") ;
-    fprintf (stderr, "If this is a genuine Raspberry Pi then please report this\n") ;
-    fprintf (stderr, "to projects@drogon.net. If this is not a Raspberry Pi then you\n") ;
-    fprintf (stderr, "are on your own as wiringPi is designed to support the\n") ;
-    fprintf (stderr, "Raspberry Pi ONLY.\n") ;
-    exit (EXIT_FAILURE) ;
-  }
-#endif
+	// Actually... That has caused me more than 10,000 emails so-far. Mosty by
+	//	people who think they know better by creating a statically linked
+	//	version that will not run with a new 4.9 kernel. I utterly hate and
+	//	despise those people.
+	//
+	//	I also get bleats from people running other than Raspbian with another
+	//	distros compiled kernel rather than a foundation compiled kernel, so
+	//	this might actually help them. It might not - I only have the capacity
+	//	to support Raspbian.
+	//
+	//	However, I've decided to leave this check out and rely purely on the
+	//	Revision: line for now. It will not work on a non-pi hardware or weird
+	//	kernels that don't give you a suitable revision line.
 
-// Actually... That has caused me more than 10,000 emails so-far. Mosty by
-//	people who think they know better by creating a statically linked
-//	version that will not run with a new 4.9 kernel. I utterly hate and
-//	despise those people.
-//
-//	I also get bleats from people running other than Raspbian with another
-//	distros compiled kernel rather than a foundation compiled kernel, so
-//	this might actually help them. It might not - I only have the capacity
-//	to support Raspbian.
-//
-//	However, I've decided to leave this check out and rely purely on the
-//	Revision: line for now. It will not work on a non-pi hardware or weird
-//	kernels that don't give you a suitable revision line.
+	// So - we're Probably on a Raspberry Pi. Check the revision field for the real
+	//	hardware type
+	//	In-future, I ought to use the device tree as there are now Pi entries in
+	//	/proc/device-tree/ ...
+	//	but I'll leave that for the next revision. Or the next.
 
-// So - we're Probably on a Raspberry Pi. Check the revision field for the real
-//	hardware type
-//	In-future, I ought to use the device tree as there are now Pi entries in
-//	/proc/device-tree/ ...
-//	but I'll leave that for the next revision. Or the next.
+	// Isolate the Revision line
 
-// Isolate the Revision line
+	  rewind (cpuFd) ;
+	  while (fgets (line, 120, cpuFd) != NULL)
+		if (strncmp (line, "Revision", 8) == 0)
+		  break ;
 
-  rewind (cpuFd) ;
-  while (fgets (line, 120, cpuFd) != NULL)
-    if (strncmp (line, "Revision", 8) == 0)
-      break ;
+	  fclose (cpuFd) ;
 
-  fclose (cpuFd) ;
+	  if (strncmp (line, "Revision", 8) != 0)
+		piGpioLayoutOops ("No \"Revision\" line") ;
 
-  if (strncmp (line, "Revision", 8) != 0)
-    piGpioLayoutOops ("No \"Revision\" line") ;
+	// Chomp trailing CR/NL
 
-// Chomp trailing CR/NL
+	  for (c = &line [strlen (line) - 1] ; (*c == '\n') || (*c == '\r') ; --c)
+		*c = 0 ;
+	  
+	  if (wiringPiDebug)
+		printf ("piGpioLayout: Revision string: %s\n", line) ;
 
-  for (c = &line [strlen (line) - 1] ; (*c == '\n') || (*c == '\r') ; --c)
-    *c = 0 ;
+	// Scan to the first character of the revision number
+
+	  for (c = line ; *c ; ++c)
+		if (*c == ':')
+		  break ;
+
+	  if (*c != ':')
+		piGpioLayoutOops ("Bogus \"Revision\" line (no colon)") ;
+
+	// Chomp spaces
+
+	  ++c ;
+	  while (isspace (*c))
+		++c ;
+
+	  if (!isxdigit (*c))
+		piGpioLayoutOops ("Bogus \"Revision\" line (no hex digit at start of revision)") ;
+
+	// Make sure its long enough
+
+	  if (strlen (c) < 4)
+		piGpioLayoutOops ("Bogus revision line (too small)") ;
+
+	// Isolate  last 4 characters: (in-case of overvolting or new encoding scheme)
+
+	  c = c + strlen (c) - 4 ;
+
+	  if (wiringPiDebug)
+		printf ("piGpioLayout: last4Chars are: \"%s\"\n", c) ;
+
+	  if ( (strcmp (c, "0002") == 0) || (strcmp (c, "0003") == 0))
+		gpioLayout = 1 ;
+	  else
+		gpioLayout = 2 ;	// Covers everything else from the B revision 2 to the B+, the Pi v2, v3, zero and CM's.
+  #endif
   
-  if (wiringPiDebug)
-    printf ("piGpioLayout: Revision string: %s\n", line) ;
-
-// Scan to the first character of the revision number
-
-  for (c = line ; *c ; ++c)
-    if (*c == ':')
-      break ;
-
-  if (*c != ':')
-    piGpioLayoutOops ("Bogus \"Revision\" line (no colon)") ;
-
-// Chomp spaces
-
-  ++c ;
-  while (isspace (*c))
-    ++c ;
-
-  if (!isxdigit (*c))
-    piGpioLayoutOops ("Bogus \"Revision\" line (no hex digit at start of revision)") ;
-
-// Make sure its long enough
-
-  if (strlen (c) < 4)
-    piGpioLayoutOops ("Bogus revision line (too small)") ;
-
-// Isolate  last 4 characters: (in-case of overvolting or new encoding scheme)
-
-  c = c + strlen (c) - 4 ;
-
-  if (wiringPiDebug)
-    printf ("piGpioLayout: last4Chars are: \"%s\"\n", c) ;
-
-  if ( (strcmp (c, "0002") == 0) || (strcmp (c, "0003") == 0))
-    gpioLayout = 1 ;
-  else
-    gpioLayout = 2 ;	// Covers everything else from the B revision 2 to the B+, the Pi v2, v3, zero and CM's.
-
   if (wiringPiDebug)
     printf ("piGpioLayoutOops: Returning revision: %d\n", gpioLayout) ;
 
@@ -952,48 +1043,64 @@ void piBoardId (int *model, int *rev, int *mem, int *maker, int *warranty)
 
   (void)piGpioLayout () ;	// Call this first to make sure all's OK. Don't care about the result.
 
-  if ((cpuFd = fopen ("/proc/cpuinfo", "r")) == NULL)
-    piGpioLayoutOops ("Unable to open /proc/cpuinfo") ;
+  #ifdef __aarch64__ 
+	uint32_t rpi_rev;
+	
+    cpuFd = fopen("/proc/device-tree/system/linux,revision", "r");
+    if (!cpuFd)
+    {
+        piGpioLayoutOops ("Unable to open /proc/device-tree/system/linux,revision") ;
+    }
+    fread(&rpi_rev, sizeof(uint32_t), 1, cpuFd);
+    #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+        rpi_rev = bswap_32(rpi_rev);  // linux,revision appears to be in big endian
+    #endif
+	revision = rpi_rev;
+	
+  #else
+	  if ((cpuFd = fopen ("/proc/cpuinfo", "r")) == NULL)
+		piGpioLayoutOops ("Unable to open /proc/cpuinfo") ;
 
-  while (fgets (line, 120, cpuFd) != NULL)
-    if (strncmp (line, "Revision", 8) == 0)
-      break ;
+	  while (fgets (line, 120, cpuFd) != NULL)
+		if (strncmp (line, "Revision", 8) == 0)
+		  break ;
 
-  fclose (cpuFd) ;
+	  fclose (cpuFd) ;
 
-  if (strncmp (line, "Revision", 8) != 0)
-    piGpioLayoutOops ("No \"Revision\" line") ;
+	  if (strncmp (line, "Revision", 8) != 0)
+		piGpioLayoutOops ("No \"Revision\" line") ;
 
-// Chomp trailing CR/NL
+	// Chomp trailing CR/NL
 
-  for (c = &line [strlen (line) - 1] ; (*c == '\n') || (*c == '\r') ; --c)
-    *c = 0 ;
+	  for (c = &line [strlen (line) - 1] ; (*c == '\n') || (*c == '\r') ; --c)
+		*c = 0 ;
+	  
+	  if (wiringPiDebug)
+		printf ("piBoardId: Revision string: %s\n", line) ;
+
+	// Need to work out if it's using the new or old encoding scheme:
+
+	// Scan to the first character of the revision number
+
+	  for (c = line ; *c ; ++c)
+		if (*c == ':')
+		  break ;
+
+	  if (*c != ':')
+		piGpioLayoutOops ("Bogus \"Revision\" line (no colon)") ;
+
+	// Chomp spaces
+
+	  ++c ;
+	  while (isspace (*c))
+		++c ;
+
+	  if (!isxdigit (*c))
+		piGpioLayoutOops ("Bogus \"Revision\" line (no hex digit at start of revision)") ;
+
+	  revision = (unsigned int)strtol (c, NULL, 16) ; // Hex number with no leading 0x
+  #endif
   
-  if (wiringPiDebug)
-    printf ("piBoardId: Revision string: %s\n", line) ;
-
-// Need to work out if it's using the new or old encoding scheme:
-
-// Scan to the first character of the revision number
-
-  for (c = line ; *c ; ++c)
-    if (*c == ':')
-      break ;
-
-  if (*c != ':')
-    piGpioLayoutOops ("Bogus \"Revision\" line (no colon)") ;
-
-// Chomp spaces
-
-  ++c ;
-  while (isspace (*c))
-    ++c ;
-
-  if (!isxdigit (*c))
-    piGpioLayoutOops ("Bogus \"Revision\" line (no hex digit at start of revision)") ;
-
-  revision = (unsigned int)strtol (c, NULL, 16) ; // Hex number with no leading 0x
-
 // Check for new way:
 
   if ((revision &  (1 << 23)) != 0)	// New way
